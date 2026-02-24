@@ -26,13 +26,13 @@ def get_date_subdir(base_dir=HISTORY_DIR):
     return day_dir
 
 
-# HTML 仪表盘模板 - 增强版（包含内存故障显示）
+# HTML 仪表盘模板 - v4.4 新增一键展开/收起
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>RAM Screening Control Center</title>
+    <title>RAM Screening Control Center v4.4</title>
     <meta http-equiv="refresh" content="30">
     <style>
         * { box-sizing: border-box; }
@@ -53,15 +53,22 @@ HTML_TEMPLATE = """
             margin-bottom: 20px; 
         }
         h1 { margin: 0; color: #00d2ff; font-size: 24px; }
+        h2 { color: #00d2ff; margin-top: 0; font-size: 18px; margin-bottom: 15px; }
+        h4 { color: #00d2ff; margin: 8px 0; font-size: 0.95em; }
         .stats { font-size: 0.9em; color: #888da8; }
         
-        /* 标签页切换 */
+        /* 标签页与全局按钮容器 */
+        .controls-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            border-bottom: 2px solid #3d4465;
+            margin-bottom: 20px;
+        }
         .tabs {
             display: flex;
             gap: 10px;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #3d4465;
-            padding-bottom: 0;
+            flex-wrap: wrap;
         }
         .tab-button {
             padding: 12px 20px;
@@ -72,6 +79,8 @@ HTML_TEMPLATE = """
             font-size: 1em;
             border-bottom: 3px solid transparent;
             transition: all 0.3s;
+            white-space: nowrap;
+            margin-bottom: -2px; /* 覆盖底边框 */
         }
         .tab-button.active {
             color: #00d2ff;
@@ -80,6 +89,26 @@ HTML_TEMPLATE = """
         .tab-button:hover {
             color: #00d2ff;
         }
+        
+        /* 全局操作按钮 (Expand/Collapse) */
+        .action-btn {
+            background: #2d324a;
+            border: 1px solid #00d2ff;
+            color: #00d2ff;
+            padding: 6px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            margin-left: 10px;
+            transition: all 0.3s;
+            margin-bottom: 10px;
+        }
+        .action-btn:hover {
+            background: #00d2ff;
+            color: #1a1c2c;
+            font-weight: bold;
+        }
+
         .tab-content {
             display: none;
         }
@@ -122,20 +151,100 @@ HTML_TEMPLATE = """
         .FAIL { background: #3a1e1e; color: #e74c3c; border: 1px solid #e74c3c; }
         .WARNING { background: #3a321e; color: #f1c40f; border: 1px solid #f1c40f; }
 
-        /* 故障 DIMM 显示 */
+        /* 折叠面板样式 */
+        .node-container {
+            border: 1px solid #3d4465;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            background: #252839;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .node-header {
+            background: #2d324a;
+            padding: 12px 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.3s;
+            user-select: none;
+        }
+        .node-header:hover {
+            background: #3d4465;
+        }
+        .node-header-info {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .node-summary-item {
+            font-size: 0.85em;
+            color: #888da8;
+        }
+        .node-summary-item span {
+            color: #e0e0e0;
+            font-weight: bold;
+        }
+        .node-content {
+            display: none;
+            padding: 20px;
+            border-top: 1px solid #3d4465;
+            background: #1a1c2c;
+        }
+        .node-content.active {
+            display: block;
+        }
+        .arrow {
+            border: solid #00d2ff;
+            border-width: 0 2px 2px 0;
+            display: inline-block;
+            padding: 4px;
+            transform: rotate(45deg);
+            transition: transform 0.3s;
+            margin-right: 10px;
+        }
+        .node-header.active-header .arrow {
+            transform: rotate(-135deg);
+        }
+
+        /* 详情卡片 */
+        .detail-card {
+            background: #2d324a;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 3px;
+            border-left: 3px solid #00d2ff;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 6px 0;
+            padding: 6px 0;
+        }
+        .detail-label {
+            font-weight: bold;
+            color: #00d2ff;
+            min-width: 200px;
+        }
+        .detail-value {
+            color: #e0e0e0;
+        }
+
+        /* 内存插槽网格 */
         .memory-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 10px;
-            margin-bottom: 20px;
+            margin: 15px 0;
         }
         .dimm-card {
-            padding: 15px;
+            padding: 12px;
             border-radius: 6px;
             background: #252839;
             border: 2px solid #3d4465;
             text-align: center;
-            transition: all 0.3s;
         }
         .dimm-card.healthy {
             border-color: #2ecc71;
@@ -146,119 +255,31 @@ HTML_TEMPLATE = """
             background: rgba(231, 76, 60, 0.1);
             box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
         }
-        .dimm-card.warning {
-            border-color: #f1c40f;
-            background: rgba(241, 196, 15, 0.1);
-        }
         .dimm-name {
             font-weight: bold;
-            margin-bottom: 5px;
-            font-size: 0.95em;
-        }
-        .dimm-status {
-            font-size: 0.85em;
-            padding: 5px 0;
-        }
-        .dimm-status.healthy { color: #2ecc71; }
-        .dimm-status.failed { color: #e74c3c; }
-        .dimm-status.warning { color: #f1c40f; }
-
-        /* 错误详情 */
-        .error-detail {
-            background: #1a1c2c;
-            border-left: 4px solid #e74c3c;
-            padding: 12px;
-            margin: 10px 0;
-            border-radius: 3px;
-            font-family: monospace;
-            font-size: 0.85em;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-
-        .error-num { font-weight: bold; }
-        .has-error { color: #e74c3c; }
-        .no-error { color: #888da8; }
-
-        /* 拖动 tooltip */
-        .tooltip-container {
-            position: relative;
-            display: inline-block;
-            border-bottom: 1px dotted #888da8;
-            cursor: pointer;
-        }
-
-        .tooltip-text {
-            position: fixed;
-            background-color: #1a1c2c;
-            color: #e0e0e0;
-            border-radius: 6px;
-            padding: 12px;
-            border: 1px solid #3d4465;
-            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
-            font-size: 0.85em;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.15s ease;
-            z-index: 9999;
-            width: auto;
-            min-width: 200px;
-            max-width: 600px;
-            max-height: 500px;
-            overflow-y: auto;
-            touch-action: none;
-        }
-
-        .tooltip-header {
-            background: linear-gradient(135deg, #3d4465 0%, #2d3455 100%);
-            padding: 8px 12px;
-            border-bottom: 1px solid #00d2ff;
-            border-radius: 6px 6px 0 0;
-            cursor: move;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            user-select: none;
-            margin: -12px -12px 8px -12px;
-        }
-
-        .tooltip-header h4 {
-            margin: 0;
             color: #00d2ff;
+            margin-bottom: 8px;
             font-size: 0.95em;
-            flex: 1;
+        }
+        .dimm-info {
+            font-size: 0.85em;
+            color: #888da8;
+            line-height: 1.4;
         }
 
-        .tooltip-close-btn {
-            background: transparent;
-            border: none;
-            color: #e0e0e0;
-            cursor: pointer;
-            font-size: 1.2em;
-            padding: 0;
-            width: 24px;
-            height: 24px;
-            border-radius: 3px;
-            transition: all 0.2s ease;
+        /* GSAT 结果卡片 */
+        .gsat-card {
+            background: #2d324a;
+            border: 1px solid #3d4465;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 10px 0;
         }
-
-        .tooltip-close-btn:hover {
-            background: rgba(231, 76, 60, 0.2);
-            color: #e74c3c;
-        }
-
-        .tooltip-content {
-            padding: 0;
-        }
-
-        .tooltip-container.active .tooltip-text {
-            opacity: 1;
-            pointer-events: auto;
-        }
-
-        .tooltip-text.dragging {
-            box-shadow: 0 12px 24px rgba(0, 210, 255, 0.3);
-            border-color: #00d2ff;
+        .gsat-title {
+            color: #00d2ff;
+            font-weight: bold;
+            font-size: 0.95em;
+            margin-bottom: 10px;
         }
 
         .footer { 
@@ -272,37 +293,44 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <header>
-            <h1>RAM SCREENING DASHBOARD</h1>
+            <h1>RAM SCREENING DASHBOARD v4.4</h1>
             <div class="stats">
                 Last Update: {{ current_time }}<br>
                 Total Active Nodes: {{ nodes|length }}
             </div>
         </header>
 
-        <!-- 标签页 -->
-        <div class="tabs">
-            <button class="tab-button active" onclick="switchTab(event, 'overview')">Overview</button>
-            <button class="tab-button" onclick="switchTab(event, 'memory-map')">Memory Map</button>
-            <button class="tab-button" onclick="switchTab(event, 'errors')">Errors Detail</button>
+        <div class="controls-container">
+            <div class="tabs">
+                <button class="tab-button active" onclick="switchTab(event, 'overview')">Overview</button>
+                <button class="tab-button" onclick="switchTab(event, 'gsat-details')">GSAT Details</button>
+                <button class="tab-button" onclick="switchTab(event, 'memory-map')">Memory Map</button>
+                <button class="tab-button" onclick="switchTab(event, 'errors')">Errors Detail</button>
+            </div>
+            <div id="global-actions" style="display: none;">
+                <button class="action-btn" onclick="expandAll()">Expand All</button>
+                <button class="action-btn" onclick="collapseAll()">Collapse All</button>
+            </div>
         </div>
 
-        <!-- Overview 标签页 -->
         <div id="overview" class="tab-content active">
             <table>
                 <thead>
                     <tr>
                         <th>IP Address</th>
                         <th>Verdict</th>
-                        <th>Stress Test</th>
+                        <th>GSAT Status</th>
+                        <th>GSAT Errors</th>
                         <th>EDAC Errors</th>
-                        <th>Failed DIMMs</th>
                         <th>Last Seen</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% if not nodes %}
                     <tr>
-                        <td colspan="6" style="text-align: center; padding: 40px; color: #5d6d7e;">No reports received yet. Waiting for nodes...</td>
+                        <td colspan="6" style="text-align: center; padding: 40px; color: #5d6d7e;">
+                            No reports received yet. Waiting for nodes...
+                        </td>
                     </tr>
                     {% endif %}
                     {% for node in nodes %}
@@ -310,56 +338,29 @@ HTML_TEMPLATE = """
                         <td><strong style="color: #00d2ff;">{{ node.ip }}</strong></td>
                         <td><span class="badge {{ node.verdict }}">{{ node.verdict }}</span></td>
                         
-                        <!-- 压力测试状态 -->
                         <td>
-                            {% if node.stress_test %}
-                            <div class="tooltip-container">
-                                {{ node.stress_test.status }}
-                                <div class="tooltip-text">
-                                    <div class="tooltip-header">
-                                        <h4>Stress Test Details</h4>
-                                        <button class="tooltip-close-btn" onclick="event.stopPropagation(); this.closest('.tooltip-container').classList.remove('active');">×</button>
-                                    </div>
-                                    <div class="tooltip-content">
-                                        <p><strong>Duration:</strong> {{ node.stress_test.duration_seconds }}s</p>
-                                        <p><strong>Memory:</strong> {{ node.stress_test.memory_percent }}%</p>
-                                        <p><strong>Exit Code:</strong> {{ node.stress_test.exit_code }}</p>
-                                    </div>
-                                </div>
-                            </div>
+                            {% if node.gsat_results %}
+                            <span class="badge {{ node.gsat_results.status }}">
+                                {{ node.gsat_results.status }}
+                            </span>
                             {% else %}
                                 N/A
                             {% endif %}
                         </td>
                         
-                        <!-- EDAC 错误 -->
-                        <td class="error-num {% if node.edac_results and (node.edac_results.ce_delta > 0 or node.edac_results.ue_delta > 0) %}has-error{% else %}no-error{% endif %}">
+                        <td>
+                            {% if node.gsat_results %}
+                            {{ node.gsat_results.errors_found }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        
+                        <td>
                             {% if node.edac_results %}
-                                CE: {{ node.edac_results.ce_delta }} / UE: {{ node.edac_results.ue_delta }}
+                            CE: {{ node.edac_results.ce_delta }} / UE: {{ node.edac_results.ue_delta }}
                             {% else %}
                                 N/A
-                            {% endif %}
-                        </td>
-                        
-                        <!-- 故障 DIMM -->
-                        <td>
-                            {% if node.memory_errors and node.memory_errors.failed_dimms|length > 0 %}
-                            <div class="tooltip-container">
-                                <span class="has-error">{{ node.memory_errors.failed_dimms|length }} Failed</span>
-                                <div class="tooltip-text">
-                                    <div class="tooltip-header">
-                                        <h4>Failed DIMMs</h4>
-                                        <button class="tooltip-close-btn" onclick="event.stopPropagation(); this.closest('.tooltip-container').classList.remove('active');">×</button>
-                                    </div>
-                                    <div class="tooltip-content">
-                                        {% for dimm in node.memory_errors.failed_dimms %}
-                                        <p style="color: #e74c3c;">{{ dimm }}</p>
-                                        {% endfor %}
-                                    </div>
-                                </div>
-                            </div>
-                            {% else %}
-                                <span class="no-error">✓ Healthy</span>
                             {% endif %}
                         </td>
                         
@@ -370,219 +371,273 @@ HTML_TEMPLATE = """
             </table>
         </div>
 
-        <!-- Memory Map 标签页 -->
-        <div id="memory-map" class="tab-content">
-            <h2 style="color: #00d2ff; margin-bottom: 20px;">Memory DIMM Status Map</h2>
-            
+        <div id="gsat-details" class="tab-content">
+            <h2>GSAT Test Results</h2>
             {% for node in nodes %}
-            <div style="margin-bottom: 30px; border: 1px solid #3d4465; padding: 15px; border-radius: 6px;">
-                <h3 style="color: #00d2ff; margin-top: 0;">{{ node.hostname or node.ip }}</h3>
+            {% if node.gsat_results %}
+            <div class="node-container">
+                <div class="node-header" onclick="toggleNode(this)">
+                    <div class="node-header-info">
+                        <strong style="color: #00d2ff; font-size: 1.1em;">{{ node.ip }}</strong>
+                        <span class="badge {{ node.gsat_results.status }}">{{ node.gsat_results.status }}</span>
+                        <div class="node-summary-item">Errors Found: <span>{{ node.gsat_results.errors_found }}</span></div>
+                        <div class="node-summary-item">Duration: <span>{{ node.gsat_results.test_time_seconds }}s</span></div>
+                        <div class="node-summary-item">Memory: <span>{{ node.gsat_results.memory_tested_mb }}MB</span></div>
+                    </div>
+                    <div class="arrow"></div>
+                </div>
                 
-                <div class="memory-grid">
-                    {% set dimm_slots = ['DIMM_0_0', 'DIMM_0_1', 'DIMM_0_2', 'DIMM_0_3', 'DIMM_1_0', 'DIMM_1_1', 'DIMM_1_2', 'DIMM_1_3'] %}
-                    {% for dimm_slot in dimm_slots %}
-                    {% set failed = false %}
-                    {% set status_class = 'healthy' %}
-                    
-                    {% if node.memory_errors and node.memory_errors.failed_dimms %}
-                        {% if dimm_slot in node.memory_errors.failed_dimms %}
-                            {% set failed = true %}
-                            {% set status_class = 'failed' %}
-                        {% endif %}
-                    {% endif %}
-                    
-                    <div class="dimm-card {{ status_class }}">
-                        <div class="dimm-name">{{ dimm_slot }}</div>
-                        <div class="dimm-status {{ status_class }}">
-                            {% if failed %}❌ Failed{% else %}✓ Healthy{% endif %}
+                <div class="node-content">
+                    <div class="gsat-card">
+                        <div class="gsat-title">Test Summary</div>
+                        <div class="detail-row">
+                            <div class="detail-label">Status:</div>
+                            <div class="detail-value">
+                                <span class="badge {{ node.gsat_results.status }}">
+                                    {{ node.gsat_results.status }}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Test Duration:</div>
+                            <div class="detail-value">{{ node.gsat_results.test_time_seconds }}s</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Memory Tested:</div>
+                            <div class="detail-value">{{ node.gsat_results.memory_tested_mb }}MB</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Cores Used:</div>
+                            <div class="detail-value">{{ node.gsat_results.cores_used }}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Exit Code:</div>
+                            <div class="detail-value">{{ node.gsat_results.exit_code }}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Errors Found:</div>
+                            <div class="detail-value">{{ node.gsat_results.errors_found }}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Test Summary:</div>
+                            <div class="detail-value">{{ node.gsat_results.summary }}</div>
                         </div>
                     </div>
-                    {% endfor %}
                 </div>
             </div>
+            {% endif %}
             {% endfor %}
         </div>
 
-        <!-- Errors Detail 标签页 -->
-        <div id="errors" class="tab-content">
-            <h2 style="color: #00d2ff; margin-bottom: 20px;">Detailed Error Report</h2>
-            
+        <div id="memory-map" class="tab-content">
+            <h2>Memory DIMM Status Map</h2>
             {% for node in nodes %}
-            {% if node.memory_errors and node.memory_errors.error_details %}
-            <div style="margin-bottom: 30px; border: 1px solid #3d4465; padding: 15px; border-radius: 6px;">
-                <h3 style="color: #00d2ff; margin-top: 0;">{{ node.hostname or node.ip }}</h3>
-                
-                <p><strong>Verdict:</strong> <span class="badge {{ node.verdict }}">{{ node.verdict }}</span></p>
-                <p><strong>Recommendation:</strong> {{ node.recommendation or 'N/A' }}</p>
-                
-                {% if node.memory_errors.failed_channels %}
-                <h4 style="color: #f1c40f; margin-top: 15px;">Failed Channels:</h4>
-                <div style="background: #1a1c2c; padding: 10px; border-radius: 3px; border-left: 4px solid #f1c40f;">
-                    {% for channel in node.memory_errors.failed_channels %}
-                    <p style="margin: 5px 0;">{{ channel }}</p>
-                    {% endfor %}
+            {% if node.memory_slots and node.memory_slots|length > 0 %}
+            <div class="node-container">
+                <div class="node-header" onclick="toggleNode(this)">
+                    <div class="node-header-info">
+                        <strong style="color: #00d2ff; font-size: 1.1em;">{{ node.ip }}</strong>
+                        <span class="badge {{ node.verdict }}">{{ node.verdict }}</span>
+                        {% if node.memory_stats %}
+                        <div class="node-summary-item">Slots: <span>{{ node.memory_stats.installed_slots }}/{{ node.memory_stats.total_slots }}</span></div>
+                        <div class="node-summary-item">Empty: <span>{{ node.memory_stats.empty_slots }}</span></div>
+                        {% endif %}
+                    </div>
+                    <div class="arrow"></div>
                 </div>
-                {% endif %}
-                
-                <h4 style="color: #e74c3c; margin-top: 15px;">EDAC Error Details:</h4>
-                <div class="error-detail">
-                    {% if node.memory_errors.error_details %}
-                    {{ node.memory_errors.error_details }}
-                    {% else %}
-                    No error details available
+
+                <div class="node-content">
+                    <div class="memory-grid">
+                        {% for slot in node.memory_slots %}
+                        {% set is_failed = false %}
+                        {% if node.memory_errors and node.memory_errors.failed_dimms %}
+                            {% for failed_dimm in node.memory_errors.failed_dimms %}
+                                {% if slot.slot in failed_dimm or failed_dimm in slot.slot %}
+                                    {% set is_failed = true %}
+                                {% endif %}
+                            {% endfor %}
+                        {% endif %}
+                        
+                        <div class="dimm-card {% if is_failed %}failed{% else %}healthy{% endif %}">
+                            <div class="dimm-name">{{ slot.slot }}</div>
+                            <div style="font-size: 0.85em; color: #a8b2d1; margin-bottom: 8px;word-break: break-all; line-height: 1.2; white-space: normal;">
+                                [{{ slot.bank_locator }}]
+                            </div>                    
+                            
+                            {% if slot.size == 'EMPTY' %}
+                            <div class="dimm-info" style="color: #f1c40f;">
+                                🔲 EMPTY
+                                {% if slot.type and slot.type != 'Unknown' %}
+                                <br>{{ slot.type }}
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <div class="dimm-info">
+                                <strong style="color: #00d2ff;">{{ slot.size }}</strong><br>
+                                {{ slot.type }}<br>
+                                {{ slot.speed }}<br>
+                                <small style="color: #888da8;">{{ slot.manufacturer }}</small>
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    
+                    {% if node.memory_stats %}
+                    <div style="background: #2d324a; padding: 10px; margin-top: 15px; border-radius: 3px;">
+                        <p style="margin: 4px 0; color: #e0e0e0;">
+                            <strong>Memory Summary:</strong>
+                            Total: {{ node.memory_stats.total_slots }} slots,
+                            Installed: {{ node.memory_stats.installed_slots }} slots,
+                            Empty: {{ node.memory_stats.empty_slots }} slots
+                        </p>
+                    </div>
                     {% endif %}
                 </div>
-                
-                {% if node.edac_results %}
-                <h4 style="color: #00d2ff; margin-top: 15px;">EDAC Statistics:</h4>
-                <table style="width: 100%; background: #1a1c2c;">
-                    <tr>
-                        <td><strong>Metric</strong></td>
-                        <td><strong>Initial</strong></td>
-                        <td><strong>Final</strong></td>
-                        <td><strong>Delta</strong></td>
-                    </tr>
-                    <tr>
-                        <td>CE (Correctable Errors)</td>
-                        <td>{{ node.edac_results.initial_ce_count }}</td>
-                        <td>{{ node.edac_results.final_ce_count }}</td>
-                        <td class="{% if node.edac_results.ce_delta > 0 %}has-error{% endif %}">{{ node.edac_results.ce_delta }}</td>
-                    </tr>
-                    <tr>
-                        <td>UE (Uncorrectable Errors)</td>
-                        <td>{{ node.edac_results.initial_ue_count }}</td>
-                        <td>{{ node.edac_results.final_ue_count }}</td>
-                        <td class="{% if node.edac_results.ue_delta > 0 %}has-error{% endif %}">{{ node.edac_results.ue_delta }}</td>
-                    </tr>
-                </table>
-                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+
+        <div id="errors" class="tab-content">
+            <h2>Detailed Error Report</h2>
+            {% for node in nodes %}
+            {% if node.memory_errors or node.edac_results %}
+            <div class="node-container">
+                <div class="node-header" onclick="toggleNode(this)">
+                    <div class="node-header-info">
+                        <strong style="color: #00d2ff; font-size: 1.1em;">{{ node.ip }}</strong>
+                        <span class="badge {{ node.verdict }}">{{ node.verdict }}</span>
+                        {% if node.edac_results %}
+                        <div class="node-summary-item">EDAC CE Δ: <span>{{ node.edac_results.ce_delta }}</span></div>
+                        <div class="node-summary-item" style="{% if node.edac_results.ue_delta > 0 %}color: #e74c3c;{% endif %}">EDAC UE Δ: <span>{{ node.edac_results.ue_delta }}</span></div>
+                        {% endif %}
+                    </div>
+                    <div class="arrow"></div>
+                </div>
+
+                <div class="node-content">
+                    <div class="detail-card">
+                        <div class="detail-row">
+                            <div class="detail-label">Verdict:</div>
+                            <div class="detail-value">
+                                <span class="badge {{ node.verdict }}">{{ node.verdict }}</span>
+                            </div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Recommendation:</div>
+                            <div class="detail-value">{{ node.recommendation or 'N/A' }}</div>
+                        </div>
+                    </div>
+                    
+                    {% if node.edac_results %}
+                    <div class="detail-card">
+                        <h4>EDAC Error Statistics</h4>
+                        <div class="detail-row">
+                            <div class="detail-label">CE (Correctable):</div>
+                            <div class="detail-value">
+                                {{ node.edac_results.initial_ce_count }} → {{ node.edac_results.final_ce_count }}
+                                (Δ {{ node.edac_results.ce_delta }})
+                            </div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">UE (Uncorrectable):</div>
+                            <div class="detail-value" style="{% if node.edac_results.ue_delta > 0 %}color: #e74c3c;{% endif %}">
+                                {{ node.edac_results.initial_ue_count }} → {{ node.edac_results.final_ue_count }}
+                                (Δ {{ node.edac_results.ue_delta }})
+                            </div>
+                        </div>
+                        
+                        {% if node.memory_errors and node.memory_errors.failed_channels %}
+                        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #3d4465;">
+                            <h4>Failed Channels:</h4>
+                            {% for channel in node.memory_errors.failed_channels %}
+                            <p style="margin: 4px 0; color: #e74c3c;">{{ channel }}</p>
+                            {% endfor %}
+                            
+                            {% if node.memory_errors.failed_dimms %}
+                            <h4 style="margin-top: 10px;">Failed DIMMs:</h4>
+                            {% for dimm in node.memory_errors.failed_dimms %}
+                            <p style="margin: 4px 0; color: #e74c3c;">{{ dimm }}</p>
+                            {% endfor %}
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    
+                    {% if node.memory_errors and node.memory_errors.error_details %}
+                    <div class="detail-card">
+                        <h4>Error Details</h4>
+                        <pre style="margin: 0; overflow-x: auto; font-size: 0.8em; color: #888da8;">{{ node.memory_errors.error_details }}</pre>
+                    </div>
+                    {% endif %}
+                </div>
             </div>
             {% endif %}
             {% endfor %}
         </div>
 
         <div class="footer">
-            Storage: {{ history_path }} | Auto-Refresh: 30s | Version: v4 (Professional Memory Testing)
+            Storage: {{ history_path }} | Auto-Refresh: 30s | Version: v4.4 (Expand/Collapse All)
         </div>
     </div>
 
     <script>
-    // 标签页切换
+    // 切换标签页逻辑
     function switchTab(event, tabName) {
-        // 隐藏所有标签页
         const contents = document.querySelectorAll('.tab-content');
         contents.forEach(content => content.classList.remove('active'));
         
-        // 移除所有标签按钮的 active 类
         const buttons = document.querySelectorAll('.tab-button');
         buttons.forEach(button => button.classList.remove('active'));
         
-        // 显示选中的标签页
         document.getElementById(tabName).classList.add('active');
         event.target.classList.add('active');
+
+        // 控制 Expand/Collapse 按钮的显示和隐藏
+        const globalActions = document.getElementById('global-actions');
+        if (tabName === 'overview') {
+            globalActions.style.display = 'none';
+        } else {
+            globalActions.style.display = 'block';
+        }
     }
 
-    // ==================== 拖动 tooltip ====================
-    document.addEventListener("DOMContentLoaded", function () {
-        const tooltips = document.querySelectorAll(".tooltip-container");
-        let draggedElement = null;
-        let offsetX = 0;
-        let offsetY = 0;
+    // 单个展开/收起逻辑
+    function toggleNode(headerElement) {
+        headerElement.classList.toggle('active-header');
+        const content = headerElement.nextElementSibling;
+        content.classList.toggle('active');
+    }
 
-        function makeDraggable(tooltipText) {
-            const header = tooltipText.querySelector(".tooltip-header");
-            if (!header) return;
+    // 一键全部展开（只作用于当前激活的 Tab）
+    function expandAll() {
+        const activeTab = document.querySelector('.tab-content.active');
+        if (!activeTab) return;
 
-            header.addEventListener("mousedown", function (e) {
-                e.preventDefault();
-                draggedElement = tooltipText;
-                tooltipText.classList.add("dragging");
-                
-                const rect = tooltipText.getBoundingClientRect();
-                offsetX = e.clientX - rect.left;
-                offsetY = e.clientY - rect.top;
-            });
-        }
-
-        document.addEventListener("mousemove", function (e) {
-            if (!draggedElement) return;
-
-            let x = e.clientX - offsetX;
-            let y = e.clientY - offsetY;
-
-            // 边界检测
-            if (x < 0) x = 0;
-            if (x + draggedElement.offsetWidth > window.innerWidth) {
-                x = window.innerWidth - draggedElement.offsetWidth;
-            }
-            if (y < 0) y = 0;
-            if (y + draggedElement.offsetHeight > window.innerHeight) {
-                y = window.innerHeight - draggedElement.offsetHeight - 20;
-            }
-
-            draggedElement.style.left = x + "px";
-            draggedElement.style.top = y + "px";
-        });
-
-        document.addEventListener("mouseup", function () {
-            if (draggedElement) {
-                draggedElement.classList.remove("dragging");
-                draggedElement = null;
+        const headers = activeTab.querySelectorAll('.node-header');
+        headers.forEach(header => {
+            if (!header.classList.contains('active-header')) {
+                header.classList.add('active-header');
+                header.nextElementSibling.classList.add('active');
             }
         });
+    }
 
-        tooltips.forEach(container => {
-            const tooltip = container.querySelector(".tooltip-text");
-            makeDraggable(tooltip);
+    // 一键全部收起（只作用于当前激活的 Tab）
+    function collapseAll() {
+        const activeTab = document.querySelector('.tab-content.active');
+        if (!activeTab) return;
 
-            container.addEventListener("click", function (e) {
-                e.stopPropagation();
-                const isActive = container.classList.contains("active");
-
-                tooltips.forEach(t => t.classList.remove("active"));
-
-                if (!isActive) {
-                    const rect = container.getBoundingClientRect();
-                    const tooltipWidth = tooltip.offsetWidth || 400;
-                    const tooltipHeight = tooltip.offsetHeight || 300;
-
-                    let top = rect.bottom + window.scrollY + 10;
-                    let left = rect.left + window.scrollX;
-
-                    if (rect.bottom + tooltipHeight + 10 > window.innerHeight) {
-                        top = Math.max(0, rect.top + window.scrollY - tooltipHeight - 10);
-                    }
-
-                    if (left + tooltipWidth > window.innerWidth) {
-                        left = window.innerWidth - tooltipWidth - 20;
-                    }
-
-                    if (left < 0) left = 10;
-
-                    tooltip.style.top = top + "px";
-                    tooltip.style.left = left + "px";
-
-                    container.classList.add("active");
-                }
-            });
-        });
-
-        document.addEventListener("click", function () {
-            tooltips.forEach(t => t.classList.remove("active"));
-        });
-
-        document.addEventListener("keydown", function (e) {
-            if (e.key === "Escape") {
-                tooltips.forEach(t => t.classList.remove("active"));
+        const headers = activeTab.querySelectorAll('.node-header');
+        headers.forEach(header => {
+            if (header.classList.contains('active-header')) {
+                header.classList.remove('active-header');
+                header.nextElementSibling.classList.remove('active');
             }
         });
-
-        document.querySelectorAll(".tooltip-text").forEach(tooltip => {
-            tooltip.addEventListener("click", function (e) {
-                e.stopPropagation();
-            });
-        });
-    });
+    }
     </script>
 </body>
 </html>
@@ -592,13 +647,13 @@ HTML_TEMPLATE = """
 # --- 路由逻辑 ---
 @app.route('/api/upload', methods=['POST'])
 def upload_data():
-    """接收内存测试结果（包括故障定位数据）"""
+    """接收测试数据"""
     try:
         data = request.get_json()
         if not data: 
             return jsonify({"status": "error"}), 400
         
-        hostname = data.get("test_metadata", {}).get("hostname", "unknown_host").replace(".", "_")
+        hostname = data.get("hostname", "unknown_host").replace(".", "_")
         timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # 保存到日期分层目录
@@ -612,10 +667,7 @@ def upload_data():
         with open(latest_file, 'w') as f:
             json.dump(data, f, indent=4)
 
-        return jsonify({
-            "status": "success",
-            "message": f"Data saved successfully"
-        }), 200
+        return jsonify({"status": "success"}), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -631,22 +683,33 @@ def index():
             with open(file_path, 'r') as f:
                 report = json.load(f)
                 
-                # 提取关键信息
-                if "test_metadata" in report:
-                    report["hostname"] = report["test_metadata"].get("hostname", "unknown")
-                    report["timestamp"] = report["test_metadata"].get("timestamp", "")
-                
-                # 从 stress_test 中提取 IP（如果有的话）
+                # 数据规范化和完善
                 if "ip" not in report:
                     report["ip"] = report.get("hostname", "Unknown")
                 
-                # 数据规范化
+                if "timestamp" not in report:
+                    report["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
                 if "verdict" not in report:
                     report["verdict"] = "UNKNOWN"
+                
                 if "recommendation" not in report:
                     report["recommendation"] = ""
+                
+                if "gsat_results" not in report:
+                    report["gsat_results"] = None
+                
+                if "edac_results" not in report:
+                    report["edac_results"] = None
+                
                 if "memory_errors" not in report:
                     report["memory_errors"] = {"failed_channels": [], "failed_dimms": [], "error_details": ""}
+                
+                if "memory_stats" not in report:
+                    report["memory_stats"] = {"total_slots": 0, "installed_slots": 0, "empty_slots": 0}
+                
+                if "memory_slots" not in report:
+                    report["memory_slots"] = []
                 
                 node_reports.append(report)
         except Exception as e: 
@@ -690,7 +753,8 @@ def get_stats():
         "total_active_hosts": total_hosts,
         "pass_count": pass_count,
         "fail_count": fail_count,
-        "warning_count": warning_count
+        "warning_count": warning_count,
+        "version": "4.4"
     }), 200
 
 
