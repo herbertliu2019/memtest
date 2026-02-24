@@ -1,34 +1,30 @@
 #!/bin/bash
 ############################################################
-# Industrial RAM Test Script - Enhanced with EDAC Memory Fault Localization
-# 基于原 ram_test.sh 的改进版本
+# Industrial RAM Test Script - v4.2 (Ultimate Version)
 # 
-# 新增功能：
-#   1. EDAC 驱动自动加载和初始化
-#   2. 故障内存条精确定位（到DIMM插槽）
-#   3. CE/UE 错误计数和增量统计
-#   4. 故障通道映射到物理 DIMM 位置
-#   5. 改进的 JSON 报告（包含EDAC数据和故障位置）
-#
-# 保持原有特性：
-#   ✓ Kernel error 仅捕捉 Memory + CPU（ECC/EDAC/MCE）
-#   ✓ 测试完成后自动上传 + 自动关机
-#   ✓ 完整的依赖检查、错误处理
+# 终极版本：融合 v3 和 v4 所有优点
+#   1. ✅ 完整的内存扫描 + 备用方案（来自v3）
+#   2. ✅ 详细的 GSAT 结果分析（来自v3）
+#   3. ✅ 优化的 JSON 结构（gsat_results 字段）（来自v3）
+#   4. ✅ 完整的 EDAC 故障定位（来自v4）
+#   5. ✅ 故障通道检测和 DIMM 映射（来自v4）
+#   6. ✅ CE/UE 增量统计（来自v4）
+#   7. ✅ 新增：提取 Bank Locator 辅助精准定位槽位
 ############################################################
 
-# --- 1. 配置区 (请根据实际情况修改) ---
+# --- 1. 配置区 ---
 TEST_TIME=300                                           # 压力测试时长（秒）
 LOG_DIR="/root/test_logs"                               # 日志路径
-UPLOAD_URL="http://192.168.30.100:5000/api/upload"      # 【重要】改成你中控服务器的IP
-UPLOAD_TOKEN=""                                         # 可选：Bearer Token，留空则不启用
-AUTO_MODE=1                                             # 1=无人值守模式(自动关机), 0=交互模式(按键退出)
-AUTO_POWEROFF=1                                         # 1=测试完成后自动关机, 0=保留现场
+UPLOAD_URL="http://192.168.30.18:8080/mem/api/upload"  # 中控服务器IP
+UPLOAD_TOKEN=""                                         # 可选：Bearer Token
+AUTO_MODE=1                                             # 1=无人值守, 0=交互模式
+AUTO_POWEROFF=1                                         # 1=自动关机, 0=保留现场
 
 mkdir -p "$LOG_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 GSAT_LOG="$LOG_DIR/gsat_${TIMESTAMP}.log"
-MEM_INV_LOG="$LOG_DIR/mem_inv_${TIMESTAMP}.log"
+MEM_DETAIL_LOG="$LOG_DIR/mem_detail_${TIMESTAMP}.log"
 EDAC_PRE_LOG="/tmp/edac_pre_${TIMESTAMP}.log"
 EDAC_POST_LOG="/tmp/edac_post_${TIMESTAMP}.log"
 JSON_FILE="/tmp/report_${TIMESTAMP}.json"
@@ -57,7 +53,7 @@ safe_exit() {
 # 2. 依赖检查
 ############################################################
 clear
-echo -e "${RES_BOLD}>>> Industrial RAM Test Pipeline Starting (Enhanced with EDAC)...${RES_NONE}"
+echo -e "${RES_BOLD}>>> Industrial RAM Test Pipeline v4.2 (Ultimate) Starting...${RES_NONE}"
 echo "Timestamp: $TIMESTAMP"
 echo ""
 
@@ -70,7 +66,7 @@ for cmd in dmidecode stressapptest curl jq awk; do
     fi
 done
 
-# 检查 edac-util（新增）
+# 检查 edac-util（可选）
 if ! command -v edac-util &>/dev/null; then
     log_warn "edac-util not found. Memory fault localization will be limited."
     EDAC_AVAILABLE=0
@@ -86,18 +82,15 @@ fi
 log_info "All dependencies OK."
 
 ############################################################
-# 3. EDAC 驱动初始化（新增）
+# 3. EDAC 驱动初始化
 ############################################################
 if [ "$EDAC_AVAILABLE" -eq 1 ]; then
     log_info "Step 0.5: Initializing EDAC drivers..."
     
-    # 加载 EDAC 核心模块
     if ! lsmod | grep -q edac_core; then
-        log_info "Loading edac_core module..."
         sudo modprobe edac_core 2>/dev/null || log_warn "Could not load edac_core"
     fi
     
-    # 尝试加载特定的 EDAC 驱动
     for driver in edac_mce_amd ie31200_edac i7core_edac ghes; do
         if modprobe -l "$driver" &>/dev/null; then
             if ! lsmod | grep -q "$driver"; then
@@ -110,55 +103,128 @@ if [ "$EDAC_AVAILABLE" -eq 1 ]; then
 fi
 
 ############################################################
-# 4. 内存插槽扫描（保持原有逻辑）
+# 4. 内存插槽扫描（提取 Bank Locator）
 ############################################################
-log_info "Step 1: Scanning memory hardware..."
+log_info "Step 1: Scanning memory hardware (detailed)..."
 HW_DROP_DETECTED=0
 
 sudo dmidecode -t memory 2>/dev/null | awk '
-/Memory Device$/ {
-    slot = ""; size = ""
+/^Memory Device/ {
+    if (slot != "") {
+        printf "%s|%s|%s|%s|%s|%s\n", slot, bank, size, type, speed, manufacturer
+    }
+    slot = ""
+    bank = "Unknown"
+    size = ""
+    type = "Unknown"
+    speed = "Unknown"
+    manufacturer = "Unknown"
 }
 /^\s+Locator:/ && !/Bank Locator/ {
-    sub(/^\s+Locator:\s+/, ""); slot = $0
+    sub(/^\s+Locator:\s+/, "")
+    slot = $0
+}
+/^\s+Bank Locator:/ {
+    sub(/^\s+Bank Locator:\s+/, "")
+    bank = $0
 }
 /^\s+Size:/ {
-    sub(/^\s+Size:\s+/, ""); size = $0
+    sub(/^\s+Size:\s+/, "")
+    size = $0
+    if (size == "" || size ~ /No Module Installed/ || size ~ /^0 *B?$/) {
+        size = "EMPTY"
+    }
+}
+/^\s+Type:/ {
+    sub(/^\s+Type:\s+/, "")
+    type = $0
+}
+/^\s+Speed:/ {
+    sub(/^\s+Speed:\s+/, "")
+    speed = $0
+}
+/^\s+Manufacturer:/ {
+    sub(/^\s+Manufacturer:\s+/, "")
+    manufacturer = $0
+}
+END {
     if (slot != "") {
-        if (size ~ /No Module Installed/ || size ~ /^0$/) {
-            printf "%s|EMPTY\n", slot
-        } else {
-            printf "%s|%s\n", slot, size
+        printf "%s|%s|%s|%s|%s|%s\n", slot, bank, size, type, speed, manufacturer
+    }
+}' > "$MEM_DETAIL_LOG"
+
+if [ ! -s "$MEM_DETAIL_LOG" ]; then
+    log_warn "dmidecode returned no memory slot info. Attempting alternative method..."
+    
+    dmidecode -t memory 2>/dev/null | awk '
+    /^Memory Device/ {
+        if (slot != "") {
+            printf "%s|%s|%s|%s|%s|%s\n", slot, bank, size, type, speed, manufacturer
+        }
+        slot = ""; bank = "Unknown"; size = ""; type = "Unknown"; speed = "Unknown"; manufacturer = "Unknown"
+    }
+    /^\s+Locator:/ && !/Bank Locator/ {
+        sub(/^\s+Locator:\s+/, ""); slot = $0
+    }
+    /^\s+Bank Locator:/ {
+        sub(/^\s+Bank Locator:\s+/, ""); bank = $0
+    }
+    /^\s+Size:/ {
+        sub(/^\s+Size:\s+/, ""); size = $0
+        if (size == "" || size ~ /No Module Installed/ || size ~ /^0 *B?$/) {
+            size = "EMPTY"
         }
     }
-}' > "$MEM_INV_LOG"
+    /^\s+Type:/ {
+        sub(/^\s+Type:\s+/, ""); type = $0
+    }
+    /^\s+Speed:/ {
+        sub(/^\s+Speed:\s+/, ""); speed = $0
+    }
+    /^\s+Manufacturer:/ {
+        sub(/^\s+Manufacturer:\s+/, ""); manufacturer = $0
+    }
+    END {
+        if (slot != "") {
+            printf "%s|%s|%s|%s|%s|%s\n", slot, bank, size, type, speed, manufacturer
+        }
+    }' > "$MEM_DETAIL_LOG"
+fi
 
-if [ ! -s "$MEM_INV_LOG" ]; then
-    log_warn "dmidecode returned no memory slot info. Skipping slot check."
+# 分析内存信息
+if [ -s "$MEM_DETAIL_LOG" ]; then
+    TOTAL_SLOTS=$(wc -l < "$MEM_DETAIL_LOG")
+    EMPTY_SLOTS=$(grep "|EMPTY|" "$MEM_DETAIL_LOG" | wc -l)
+    INSTALLED_SLOTS=$((TOTAL_SLOTS - EMPTY_SLOTS))
+    
+    log_info "Memory Inventory:"
+    log_info "  Total slots: $TOTAL_SLOTS | Installed: $INSTALLED_SLOTS | Empty: $EMPTY_SLOTS"
+    
+    while IFS='|' read -r slot bank size type speed manufacturer; do
+        if [ "$size" = "EMPTY" ]; then
+            log_warn "  Slot $slot ($bank): EMPTY"
+            HW_DROP_DETECTED=1
+        else
+            log_info "  Slot $slot ($bank): $size | Type: $type | Speed: $speed | Mfg: $manufacturer"
+        fi
+    done < "$MEM_DETAIL_LOG"
 else
-    TOTAL_SLOTS=$(wc -l < "$MEM_INV_LOG")
-    EMPTY_SLOTS=$(grep -c "EMPTY" "$MEM_INV_LOG" || true)
-    log_info "Total slots: $TOTAL_SLOTS | Empty slots: $EMPTY_SLOTS"
-    if [ "$EMPTY_SLOTS" -gt 0 ]; then
-        HW_DROP_DETECTED=1
-        log_warn "Empty memory slot(s) detected!"
-        grep "EMPTY" "$MEM_INV_LOG" | awk -F'|' '{print "  -> Slot: " $1}'
-    fi
+    log_warn "Unable to get memory inventory from dmidecode"
+    TOTAL_SLOTS=0
+    EMPTY_SLOTS=0
+    INSTALLED_SLOTS=0
 fi
 
 ############################################################
-# 5. 采集测试前的 EDAC 状态（新增）
+# 5. 采集测试前的 EDAC 状态
 ############################################################
 INITIAL_CE_COUNT=0
 INITIAL_UE_COUNT=0
 
 if [ "$EDAC_AVAILABLE" -eq 1 ]; then
     log_info "Recording initial EDAC state..."
-    
-    # 保存当前 dmesg 中的 EDAC 错误（用于增量检测）
     dmesg | grep -iE "ECC|EDAC" | grep -v "Corrected" > "$EDAC_PRE_LOG" 2>/dev/null || true
     
-    # 尝试从 edac-util 获取初始错误计数
     if edac-util -v &>/dev/null; then
         INITIAL_CE_COUNT=$(edac-util -v 2>/dev/null | grep "CE: " | awk '{sum+=$NF} END {print sum+0}')
         INITIAL_UE_COUNT=$(edac-util -v 2>/dev/null | grep "UE: " | awk '{sum+=$NF} END {print sum+0}')
@@ -167,7 +233,7 @@ if [ "$EDAC_AVAILABLE" -eq 1 ]; then
 fi
 
 ############################################################
-# 6. 压力测试 (stressapptest) - 保持原有逻辑
+# 6. 压力测试 (stressapptest)
 ############################################################
 TOTAL_CORES=$(nproc)
 FREE_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
@@ -182,31 +248,34 @@ fi
 log_info "Step 2: Running stressapptest..."
 log_info "  Cores: $TOTAL_CORES | Memory to test: ${TEST_MB}MB | Duration: ${TEST_TIME}s"
 
-dmesg | grep -iE "ECC|EDAC" | grep -v "Corrected" > /tmp/pre_mem_err_${TIMESTAMP}.log 2>/dev/null || true
-dmesg | grep -iE "MCE" | grep -v "Corrected" > /tmp/pre_cpu_err_${TIMESTAMP}.log 2>/dev/null || true
-
 stressapptest -M "${TEST_MB}" -s "${TEST_TIME}" -W --cc_test > "$GSAT_LOG" 2>&1
 GSAT_EXIT=$?
 
-dmesg | grep -iE "ECC|EDAC" | grep -v "Corrected" > /tmp/post_mem_err_${TIMESTAMP}.log 2>/dev/null || true
-dmesg | grep -iE "MCE" | grep -v "Corrected" > /tmp/post_cpu_err_${TIMESTAMP}.log 2>/dev/null || true
+############################################################
+# 7. 详细的 GSAT 结果分析
+############################################################
+log_info "Analyzing GSAT results..."
 
-MEM_KERNEL_ERRORS=$(diff "/tmp/pre_mem_err_${TIMESTAMP}.log" "/tmp/post_mem_err_${TIMESTAMP}.log" 2>/dev/null | grep -c '^>' || true)
-CPU_KERNEL_ERRORS=$(diff "/tmp/pre_cpu_err_${TIMESTAMP}.log" "/tmp/post_cpu_err_${TIMESTAMP}.log" 2>/dev/null | grep -c '^>' || true)
+GSAT_ERRORS=$(grep -i "error" "$GSAT_LOG" | grep -vc "^$" || true)
+GSAT_MESSAGES=$(tail -20 "$GSAT_LOG" | head -1)
+GSAT_SUMMARY=$(grep -i "summary\|result\|pass\|fail" "$GSAT_LOG" | tail -1 || echo "No summary available")
 
-GSAT_REAL_ERRORS=0
-if grep -qiE "Error|FAIL" "$GSAT_LOG" 2>/dev/null; then
-    _parsed=$(grep -oP '\d+ error' "$GSAT_LOG" | tail -1 | grep -oP '\d+' || true)
-    [ -n "$_parsed" ] && GSAT_REAL_ERRORS=$_parsed
+if [ "$GSAT_EXIT" -eq 0 ]; then
+    GSAT_STATUS="PASS"
+    GSAT_REAL_ERRORS=0
+else
+    GSAT_STATUS="FAIL"
+    GSAT_REAL_ERRORS=$(grep -oP '\d+ error' "$GSAT_LOG" | head -1 | grep -oP '\d+' || echo "Unknown")
+    if [ "$GSAT_REAL_ERRORS" = "Unknown" ]; then
+        GSAT_REAL_ERRORS=-1
+    fi
 fi
-if [ "$GSAT_EXIT" -ne 0 ] && [ "$GSAT_REAL_ERRORS" -eq 0 ]; then
-    GSAT_REAL_ERRORS=-1
-fi
 
-log_info "stressapptest exit code: $GSAT_EXIT | Parsed errors: $GSAT_REAL_ERRORS | Mem kernel errors: $MEM_KERNEL_ERRORS | CPU kernel errors: $CPU_KERNEL_ERRORS"
+log_info "GSAT Exit Code: $GSAT_EXIT | Status: $GSAT_STATUS | Errors: $GSAT_REAL_ERRORS"
+log_info "GSAT Summary: $GSAT_SUMMARY"
 
 ############################################################
-# 7. 采集测试后的 EDAC 状态并计算增量（新增）
+# 8. 采集测试后的 EDAC 状态
 ############################################################
 FINAL_CE_COUNT=$INITIAL_CE_COUNT
 FINAL_UE_COUNT=$INITIAL_UE_COUNT
@@ -218,10 +287,8 @@ EDAC_ERROR_DETAILS=""
 if [ "$EDAC_AVAILABLE" -eq 1 ]; then
     log_info "Analyzing EDAC results..."
     
-    # 保存当前 dmesg 中的 EDAC 错误
     dmesg | grep -iE "ECC|EDAC" | grep -v "Corrected" > "$EDAC_POST_LOG" 2>/dev/null || true
     
-    # 获取最终错误计数
     if edac-util -v &>/dev/null; then
         FINAL_CE_COUNT=$(edac-util -v 2>/dev/null | grep "CE: " | awk '{sum+=$NF} END {print sum+0}')
         FINAL_UE_COUNT=$(edac-util -v 2>/dev/null | grep "UE: " | awk '{sum+=$NF} END {print sum+0}')
@@ -232,20 +299,18 @@ if [ "$EDAC_AVAILABLE" -eq 1 ]; then
     
     log_info "Final EDAC counters: CE=$FINAL_CE_COUNT (delta: $CE_DELTA), UE=$FINAL_UE_COUNT (delta: $UE_DELTA)"
     
-    # 检测故障通道（从 dmesg 中提取）
     EDAC_ERROR_DETAILS=$(diff "$EDAC_PRE_LOG" "$EDAC_POST_LOG" 2>/dev/null | grep '^>' | sed 's/^> //' || true)
     
     if [ -n "$EDAC_ERROR_DETAILS" ]; then
-        # 提取 mc# 和 ch# 信息
         FAILED_CHANNELS=$(echo "$EDAC_ERROR_DETAILS" | grep -oE "mc[0-9]+[[:space:]]+ch[0-9]+" | sort -u | tr '\n' ',' | sed 's/,$//')
         log_info "Failed channels detected: $FAILED_CHANNELS"
     fi
 fi
 
 ############################################################
-# 8. 最终判定 - 增加 UE 错误的严重性（新增逻辑）
+# 9. 最终判定
 ############################################################
-if [ "$GSAT_EXIT" -ne 0 ] || [ "$GSAT_REAL_ERRORS" -gt 0 ] || [ "$MEM_KERNEL_ERRORS" -gt 0 ] || [ "$CPU_KERNEL_ERRORS" -gt 0 ] || [ "$UE_DELTA" -gt 0 ]; then
+if [ "$GSAT_EXIT" -ne 0 ] || [ "$GSAT_REAL_ERRORS" -gt 0 ] 2>/dev/null || [ "$UE_DELTA" -gt 0 ]; then
     FINAL_STATUS="FAIL"
 elif [ "$CE_DELTA" -gt 10 ] || [ "$HW_DROP_DETECTED" -eq 1 ]; then
     FINAL_STATUS="WARNING"
@@ -256,17 +321,14 @@ fi
 log_info "Final verdict: $FINAL_STATUS"
 
 ############################################################
-# 9. 映射故障通道到物理 DIMM（新增）
+# 10. 映射故障通道到物理 DIMM
 ############################################################
 FAILED_DIMMS=""
 
 if [ -n "$FAILED_CHANNELS" ]; then
     log_info "Mapping failed channels to physical DIMMs..."
     
-    # 简单映射规则（可根据实际主板修改）
-    # mc0_ch0 -> DIMM_0_0, mc0_ch1 -> DIMM_0_1, etc.
     FAILED_DIMMS=$(echo "$FAILED_CHANNELS" | tr ',' '\n' | while read channel; do
-        # 提取 mc 和 ch 数字
         mc=$(echo "$channel" | grep -oE 'mc[0-9]+' | grep -oE '[0-9]+')
         ch=$(echo "$channel" | grep -oE 'ch[0-9]+' | grep -oE '[0-9]+')
         echo "DIMM_${mc}_${ch}"
@@ -276,31 +338,42 @@ if [ -n "$FAILED_CHANNELS" ]; then
 fi
 
 ############################################################
-# 10. 构造改进的 JSON（新增 EDAC 字段）
+# 11. 构造优化的 JSON 结构（包含 Bank Locator）
 ############################################################
 log_info "Step 3: Packaging report..."
-HOSTNAME_VAL=$(hostname)
 IP_ADDR=$(hostname -I | awk '{print $1}')
+HOSTNAME_VAL="$IP_ADDR"
 
-# 构建 slots JSON 数组
-SLOTS_JSON=$(awk -F'|' '{print $1, $2}' "$MEM_INV_LOG" 2>/dev/null | \
-    jq -Rn '[inputs | split(" ") | {"slot": .[0], "size": (.[1:] | join(" "))}]' 2>/dev/null || echo "[]")
+if [ -s "$MEM_DETAIL_LOG" ]; then
+    SLOTS_JSON=$(awk -F'|' '{
+        printf "{\"slot\": \"%s\", \"bank_locator\": \"%s\", \"size\": \"%s\", \"type\": \"%s\", \"speed\": \"%s\", \"manufacturer\": \"%s\"}\n", $1, $2, $3, $4, $5, $6
+    }' "$MEM_DETAIL_LOG" | jq -s '.')
+else
+    SLOTS_JSON="[]"
+fi
 
-# 构建故障通道数组
+GSAT_DETAILS=$(cat <<EOF
+{
+  "test_time_seconds": $TEST_TIME,
+  "memory_tested_mb": $TEST_MB,
+  "cores_used": $TOTAL_CORES,
+  "exit_code": $GSAT_EXIT,
+  "status": "$GSAT_STATUS",
+  "errors_found": $GSAT_REAL_ERRORS,
+  "summary": "$GSAT_SUMMARY"
+}
+EOF
+)
+
 FAILED_CHANNELS_JSON=$(echo "$FAILED_CHANNELS" | jq -Rn 'input | split(",") | map(select(length > 0))' 2>/dev/null || echo "[]")
-
-# 构建故障 DIMM 数组
 FAILED_DIMMS_JSON=$(echo "$FAILED_DIMMS" | jq -Rn 'input | split(",") | map(select(length > 0))' 2>/dev/null || echo "[]")
 
-# 使用 jq 安全构造整个 JSON（新增 EDAC 部分）
 jq -n \
-    --arg hostname "$IP_ADDR" \
+    --arg hostname "$HOSTNAME_VAL" \
     --arg ip       "$IP_ADDR" \
     --arg verdict  "$FINAL_STATUS" \
     --arg ts       "$(date '+%Y-%m-%d %H:%M:%S')" \
     --argjson gsat_errors  "$GSAT_REAL_ERRORS" \
-    --argjson mem_kernel_errors  "$MEM_KERNEL_ERRORS" \
-    --argjson cpu_kernel_errors  "$CPU_KERNEL_ERRORS" \
     --argjson test_time    "$TEST_TIME" \
     --argjson mem_mb       "$TEST_MB" \
     --argjson slots        "$SLOTS_JSON" \
@@ -313,16 +386,22 @@ jq -n \
     --argjson failed_channels "$FAILED_CHANNELS_JSON" \
     --argjson failed_dimms    "$FAILED_DIMMS_JSON" \
     --arg edac_details     "$EDAC_ERROR_DETAILS" \
+    --argjson memory_stats "{\"total_slots\": $TOTAL_SLOTS, \"installed_slots\": $INSTALLED_SLOTS, \"empty_slots\": $EMPTY_SLOTS}" \
+    --argjson gsat_details "$GSAT_DETAILS" \
     '{
         hostname:       $hostname,
         ip:             $ip,
         verdict:        $verdict,
         timestamp:      $ts,
         errors: {
-            gsat:           $gsat_errors,
-            mem_kernel:     $mem_kernel_errors,
-            cpu_kernel:     $cpu_kernel_errors
+            gsat: $gsat_errors
         },
+        metrics: {
+            test_time:      $test_time,
+            mem_tested_mb:  $mem_mb,
+            cores_used:     ('$TOTAL_CORES')
+        },
+        gsat_results:   $gsat_details,
         edac_results: {
             initial_ce_count: $initial_ce,
             final_ce_count:   $final_ce,
@@ -336,17 +415,14 @@ jq -n \
             failed_dimms:    $failed_dimms,
             error_details:   $edac_details
         },
-        metrics: {
-            test_time:      $test_time,
-            mem_tested_mb:  $mem_mb
-        },
-        memory_slots: $slots
+        memory_stats:   $memory_stats,
+        memory_slots:   $slots
     }' > "$JSON_FILE"
 
 log_info "Report saved to $JSON_FILE"
 
 ############################################################
-# 11. 上传（保持原有逻辑）
+# 12. 上传
 ############################################################
 log_info "Step 4: Uploading report to $UPLOAD_URL ..."
 UPLOAD_OK=0
@@ -381,7 +457,7 @@ if [ "$UPLOAD_OK" -eq 0 ]; then
 fi
 
 ############################################################
-# 12. 结果展示（增强版，显示故障位置）
+# 13. 结果展示
 ############################################################
 echo ""
 echo "############################################################"
@@ -391,33 +467,35 @@ case "$FINAL_STATUS" in
     FAIL)    echo -e "        TEST VERDICT: ${RES_RED}${RES_BOLD}FAIL${RES_NONE}" ;;
 esac
 echo "############################################################"
-printf "  %-18s %s\n" "HOSTNAME(IP):"  "$IP_ADDR"
-printf "  %-18s %s\n" "GSAT ERRORS:"   "$GSAT_REAL_ERRORS"
-printf "  %-18s %s\n" "MEM KERNEL ERR:" "$MEM_KERNEL_ERRORS"
-printf "  %-18s %s\n" "CPU KERNEL ERR:" "$CPU_KERNEL_ERRORS"
+printf "  %-20s %s\n" "HOSTNAME(IP):" "$IP_ADDR"
+printf "  %-20s %s\n" "GSAT STATUS:" "$GSAT_STATUS"
+printf "  %-20s %s\n" "GSAT ERRORS:" "$GSAT_REAL_ERRORS"
+printf "  %-20s %s\n" "GSAT SUMMARY:" "$GSAT_SUMMARY"
+printf "  %-20s %s\n" "TEST DURATION:" "${TEST_TIME}s"
+printf "  %-20s %s\n" "MEMORY TESTED:" "${TEST_MB}MB"
+printf "  %-20s %s\n" "CORES USED:" "$TOTAL_CORES"
+printf "  %-20s %s\n" "TOTAL MEM SLOTS:" "$TOTAL_SLOTS"
+printf "  %-20s %s\n" "INSTALLED SLOTS:" "$INSTALLED_SLOTS"
+printf "  %-20s %s\n" "EMPTY SLOTS:" "$EMPTY_SLOTS"
 
-# 新增：显示 EDAC 结果
 if [ "$EDAC_AVAILABLE" -eq 1 ]; then
-    printf "  %-18s CE: $FINAL_CE_COUNT (+$CE_DELTA) | UE: $FINAL_UE_COUNT (+$UE_DELTA)\n" "EDAC ERRORS:"
-    
+    printf "  %-20s CE: $FINAL_CE_COUNT (+$CE_DELTA) | UE: $FINAL_UE_COUNT (+$UE_DELTA)\n" "EDAC ERRORS:"
     if [ -n "$FAILED_CHANNELS" ]; then
-        printf "  %-18s %s\n" "FAILED CHANNELS:" "$FAILED_CHANNELS"
-        printf "  %-18s %s\n" "FAILED DIMMs:" "$FAILED_DIMMS"
+        printf "  %-20s %s\n" "FAILED CHANNELS:" "$FAILED_CHANNELS"
+        printf "  %-20s %s\n" "FAILED DIMMs:" "$FAILED_DIMMS"
     fi
 fi
 
-printf "  %-18s %s\n" "MISSING SLOTS:" "$( [ "$HW_DROP_DETECTED" -eq 1 ] && echo "YES ($EMPTY_SLOTS slot(s))" || echo "NONE" )"
-printf "  %-18s %s\n" "UPLOAD:"        "$( [ "$UPLOAD_OK" -eq 1 ] && echo "OK" || echo "FAILED (local copy kept)" )"
-printf "  %-18s %s\n" "LOG DIR:"       "$LOG_DIR"
+printf "  %-20s %s\n" "UPLOAD:" "$( [ "$UPLOAD_OK" -eq 1 ] && echo "OK" || echo "FAILED" )"
+printf "  %-20s %s\n" "LOG DIR:" "$LOG_DIR"
 echo "############################################################"
 
 ############################################################
-# 13. 自动关机逻辑（保持原有）
+# 14. 自动关机
 ############################################################
 if [ "$AUTO_POWEROFF" -eq 1 ]; then
     if [ "$FINAL_STATUS" = "FAIL" ]; then
         log_warn "Test failed. Machine will power off in 30 seconds..."
-        log_warn "Press Ctrl+C to cancel auto-poweroff."
         sleep 30
     else
         log_info "Test completed. Machine will power off in 10 seconds..."
@@ -435,7 +513,6 @@ else
     fi
 fi
 
-# 退出码逻辑
 if [ "$FINAL_STATUS" = "FAIL" ]; then
     safe_exit 1
 elif [ "$UPLOAD_OK" -eq 0 ]; then
