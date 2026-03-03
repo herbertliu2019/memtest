@@ -26,14 +26,14 @@ def get_date_subdir(base_dir=HISTORY_DIR):
     return day_dir
 
 
-# HTML 仪表盘模板 - v4.4 新增一键展开/收起
+# HTML 仪表盘模板 - v4.5
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>RAM Screening Control Center v4.4</title>
-    <meta http-equiv="refresh" content="30">
+    <title>RAM Screening Control Center v4.5</title>
+    <meta http-equiv="refresh" content="120">
     <style>
         * { box-sizing: border-box; }
         body { 
@@ -80,7 +80,7 @@ HTML_TEMPLATE = """
             border-bottom: 3px solid transparent;
             transition: all 0.3s;
             white-space: nowrap;
-            margin-bottom: -2px; /* 覆盖底边框 */
+            margin-bottom: -2px;
         }
         .tab-button.active {
             color: #00d2ff;
@@ -90,7 +90,6 @@ HTML_TEMPLATE = """
             color: #00d2ff;
         }
         
-        /* 全局操作按钮 (Expand/Collapse) */
         .action-btn {
             background: #2d324a;
             border: 1px solid #00d2ff;
@@ -140,16 +139,22 @@ HTML_TEMPLATE = """
         }
         tr:hover { background: #2d324a; }
 
-        /* 状态标签 */
+        /* 状态标签与提示 */
         .badge { 
             padding: 4px 10px; 
             border-radius: 4px; 
             font-weight: bold; 
             font-size: 0.85em; 
+            cursor: help; /* 鼠标样式提示有悬停内容 */
         }
         .PASS { background: #1e3a2a; color: #2ecc71; border: 1px solid #2ecc71; }
         .FAIL { background: #3a1e1e; color: #e74c3c; border: 1px solid #e74c3c; }
         .WARNING { background: #3a321e; color: #f1c40f; border: 1px solid #f1c40f; }
+
+        .hover-cell {
+            cursor: help;
+            text-decoration: underline dotted #5d6d7e;
+        }
 
         /* 折叠面板样式 */
         .node-container {
@@ -209,7 +214,6 @@ HTML_TEMPLATE = """
             transform: rotate(-135deg);
         }
 
-        /* 详情卡片 */
         .detail-card {
             background: #2d324a;
             padding: 12px;
@@ -232,7 +236,6 @@ HTML_TEMPLATE = """
             color: #e0e0e0;
         }
 
-        /* 内存插槽网格 */
         .memory-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -267,7 +270,6 @@ HTML_TEMPLATE = """
             line-height: 1.4;
         }
 
-        /* GSAT 结果卡片 */
         .gsat-card {
             background: #2d324a;
             border: 1px solid #3d4465;
@@ -293,10 +295,10 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <header>
-            <h1>RAM SCREENING DASHBOARD v4.4</h1>
+            <h1>RAM SCREENING DASHBOARD v4.5</h1>
             <div class="stats">
                 Last Update: {{ current_time }}<br>
-                Total Active Nodes: {{ nodes|length }}
+                Total Detected Nodes: {{ nodes|length }}
             </div>
         </header>
 
@@ -305,7 +307,7 @@ HTML_TEMPLATE = """
                 <button class="tab-button active" onclick="switchTab(event, 'overview')">Overview</button>
                 <button class="tab-button" onclick="switchTab(event, 'gsat-details')">GSAT Details</button>
                 <button class="tab-button" onclick="switchTab(event, 'memory-map')">Memory Map</button>
-                <button class="tab-button" onclick="switchTab(event, 'errors')">Errors Detail</button>
+                <button class="tab-button" onclick="switchTab(event, 'errors')">EDAC Error Detail</button>
             </div>
             <div id="global-actions" style="display: none;">
                 <button class="action-btn" onclick="expandAll()">Expand All</button>
@@ -336,9 +338,13 @@ HTML_TEMPLATE = """
                     {% for node in nodes %}
                     <tr>
                         <td><strong style="color: #00d2ff;">{{ node.ip }}</strong></td>
-                        <td><span class="badge {{ node.verdict }}">{{ node.verdict }}</span></td>
-                        
                         <td>
+                            <span class="badge {{ node.verdict }}" title="{{ node.verdict_summary }}">
+                                {{ node.verdict }}
+                            </span>
+                        </td>
+                        
+                        <td class="hover-cell" title="GSAT Status: {{ node.gsat_results.status if node.gsat_results else 'N/A' }} - {{ node.gsat_results.summary if node.gsat_results else 'No summary' }}">
                             {% if node.gsat_results %}
                             <span class="badge {{ node.gsat_results.status }}">
                                 {{ node.gsat_results.status }}
@@ -500,14 +506,13 @@ HTML_TEMPLATE = """
         </div>
 
         <div id="errors" class="tab-content">
-            <h2>Detailed Error Report</h2>
+            <h2>Detailed EDAC Error Report</h2>
             {% for node in nodes %}
             {% if node.memory_errors or node.edac_results %}
             <div class="node-container">
                 <div class="node-header" onclick="toggleNode(this)">
                     <div class="node-header-info">
                         <strong style="color: #00d2ff; font-size: 1.1em;">{{ node.ip }}</strong>
-                        <span class="badge {{ node.verdict }}">{{ node.verdict }}</span>
                         {% if node.edac_results %}
                         <div class="node-summary-item">EDAC CE Δ: <span>{{ node.edac_results.ce_delta }}</span></div>
                         <div class="node-summary-item" style="{% if node.edac_results.ue_delta > 0 %}color: #e74c3c;{% endif %}">EDAC UE Δ: <span>{{ node.edac_results.ue_delta }}</span></div>
@@ -517,19 +522,6 @@ HTML_TEMPLATE = """
                 </div>
 
                 <div class="node-content">
-                    <div class="detail-card">
-                        <div class="detail-row">
-                            <div class="detail-label">Verdict:</div>
-                            <div class="detail-value">
-                                <span class="badge {{ node.verdict }}">{{ node.verdict }}</span>
-                            </div>
-                        </div>
-                        <div class="detail-row">
-                            <div class="detail-label">Recommendation:</div>
-                            <div class="detail-value">{{ node.recommendation or 'N/A' }}</div>
-                        </div>
-                    </div>
-                    
                     {% if node.edac_results %}
                     <div class="detail-card">
                         <h4>EDAC Error Statistics</h4>
@@ -546,29 +538,13 @@ HTML_TEMPLATE = """
                                 {{ node.edac_results.initial_ue_count }} → {{ node.edac_results.final_ue_count }}
                                 (Δ {{ node.edac_results.ue_delta }})
                             </div>
-                        </div>
-                        
-                        {% if node.memory_errors and node.memory_errors.failed_channels %}
-                        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #3d4465;">
-                            <h4>Failed Channels:</h4>
-                            {% for channel in node.memory_errors.failed_channels %}
-                            <p style="margin: 4px 0; color: #e74c3c;">{{ channel }}</p>
-                            {% endfor %}
-                            
-                            {% if node.memory_errors.failed_dimms %}
-                            <h4 style="margin-top: 10px;">Failed DIMMs:</h4>
-                            {% for dimm in node.memory_errors.failed_dimms %}
-                            <p style="margin: 4px 0; color: #e74c3c;">{{ dimm }}</p>
-                            {% endfor %}
-                            {% endif %}
-                        </div>
-                        {% endif %}
+                        </div>               
                     </div>
                     {% endif %}
                     
                     {% if node.memory_errors and node.memory_errors.error_details %}
                     <div class="detail-card">
-                        <h4>Error Details</h4>
+                        <h4>EDAC Error Details</h4>
                         <pre style="margin: 0; overflow-x: auto; font-size: 0.8em; color: #888da8;">{{ node.memory_errors.error_details }}</pre>
                     </div>
                     {% endif %}
@@ -579,12 +555,11 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="footer">
-            Storage: {{ history_path }} | Auto-Refresh: 30s | Version: v4.4 (Expand/Collapse All)
+            Storage: {{latest_path}} | Auto-Refresh: 120s | Version: v4.5 (Optimized Hover & Detail View)
         </div>
     </div>
 
     <script>
-    // 切换标签页逻辑
     function switchTab(event, tabName) {
         const contents = document.querySelectorAll('.tab-content');
         contents.forEach(content => content.classList.remove('active'));
@@ -595,7 +570,6 @@ HTML_TEMPLATE = """
         document.getElementById(tabName).classList.add('active');
         event.target.classList.add('active');
 
-        // 控制 Expand/Collapse 按钮的显示和隐藏
         const globalActions = document.getElementById('global-actions');
         if (tabName === 'overview') {
             globalActions.style.display = 'none';
@@ -604,14 +578,12 @@ HTML_TEMPLATE = """
         }
     }
 
-    // 单个展开/收起逻辑
     function toggleNode(headerElement) {
         headerElement.classList.toggle('active-header');
         const content = headerElement.nextElementSibling;
         content.classList.toggle('active');
     }
 
-    // 一键全部展开（只作用于当前激活的 Tab）
     function expandAll() {
         const activeTab = document.querySelector('.tab-content.active');
         if (!activeTab) return;
@@ -625,7 +597,6 @@ HTML_TEMPLATE = """
         });
     }
 
-    // 一键全部收起（只作用于当前激活的 Tab）
     function collapseAll() {
         const activeTab = document.querySelector('.tab-content.active');
         if (!activeTab) return;
@@ -642,6 +613,46 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+
+
+# --- 数据判断逻辑 ---
+def determine_verdict_and_summary(report):
+    """
+    更新后的逻辑：返回值严格匹配前端 Hover 显示需求
+    """
+    gsat_results = report.get("gsat_results", {})
+    edac_results = report.get("edac_results", {})
+    memory_stats = report.get("memory_stats", {})
+    
+    # 提取关键数据
+    gsat_errors = gsat_results.get("errors_found", 0) if gsat_results else 0
+    edac_ue = edac_results.get("ue_delta", 0) if edac_results else 0
+    empty_slots = memory_stats.get("empty_slots", 0) if memory_stats else 0
+    total_slots = memory_stats.get("total_slots", 0) if memory_stats else 0
+    installed_slots = memory_stats.get("installed_slots", 0) if memory_stats else 0
+    
+    # 1. FAIL 逻辑
+    if gsat_errors > 0 or edac_ue > 0:
+        verdict = "FAIL"
+        if gsat_errors > 0 and edac_ue > 0:
+            summary = f"FAIL - GSAT & EDAC Errors: GSAT {gsat_errors}, EDAC UE {edac_ue}"
+        elif gsat_errors > 0:
+            summary = f"FAIL - GSAT Errors: {gsat_errors} errors found"
+        else:
+            summary = f"FAIL - EDAC Errors: {edac_ue} uncorrectable errors"
+    
+    # 2. WARNING 逻辑
+    elif empty_slots > 0:
+        verdict = "WARNING"
+        summary = f"WARNING - Memory Summary: Total: {total_slots} slots, Installed: {installed_slots} slots, Empty: {empty_slots} slots"
+    
+    # 3. PASS 逻辑
+    else:
+        verdict = "PASS"
+        summary = "PASS - All tests passed - No errors detected"
+    
+    return verdict, summary
 
 
 # --- 路由逻辑 ---
@@ -683,33 +694,24 @@ def index():
             with open(file_path, 'r') as f:
                 report = json.load(f)
                 
-                # 数据规范化和完善
+                # 数据规范化
                 if "ip" not in report:
                     report["ip"] = report.get("hostname", "Unknown")
                 
                 if "timestamp" not in report:
                     report["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                if "verdict" not in report:
-                    report["verdict"] = "UNKNOWN"
+                # 计算最新的 verdict 和 summary
+                verdict, verdict_summary = determine_verdict_and_summary(report)
+                report["verdict"] = verdict
+                report["verdict_summary"] = verdict_summary
                 
-                if "recommendation" not in report:
-                    report["recommendation"] = ""
-                
-                if "gsat_results" not in report:
-                    report["gsat_results"] = None
-                
-                if "edac_results" not in report:
-                    report["edac_results"] = None
-                
-                if "memory_errors" not in report:
-                    report["memory_errors"] = {"failed_channels": [], "failed_dimms": [], "error_details": ""}
-                
-                if "memory_stats" not in report:
-                    report["memory_stats"] = {"total_slots": 0, "installed_slots": 0, "empty_slots": 0}
-                
-                if "memory_slots" not in report:
-                    report["memory_slots"] = []
+                # 兼容旧数据/补齐字段
+                if "gsat_results" not in report: report["gsat_results"] = None
+                if "edac_results" not in report: report["edac_results"] = None
+                if "memory_errors" not in report: report["memory_errors"] = {"failed_channels": [], "failed_dimms": [], "error_details": ""}
+                if "memory_stats" not in report: report["memory_stats"] = {"total_slots": 0, "installed_slots": 0, "empty_slots": 0}
+                if "memory_slots" not in report: report["memory_slots"] = []
                 
                 node_reports.append(report)
         except Exception as e: 
@@ -722,7 +724,7 @@ def index():
         HTML_TEMPLATE, 
         nodes=node_reports, 
         current_time=current_time, 
-        history_path=HISTORY_DIR
+        latest_path=LATEST_DIR
     )
 
 
@@ -739,13 +741,10 @@ def get_stats():
         try:
             with open(file_path, 'r') as f:
                 data = json.load(f)
-                verdict = data.get("verdict", "UNKNOWN")
-                if verdict == "PASS":
-                    pass_count += 1
-                elif verdict == "FAIL":
-                    fail_count += 1
-                elif verdict == "WARNING":
-                    warning_count += 1
+                verdict, _ = determine_verdict_and_summary(data)
+                if verdict == "PASS": pass_count += 1
+                elif verdict == "FAIL": fail_count += 1
+                elif verdict == "WARNING": warning_count += 1
         except:
             pass
     
@@ -754,7 +753,7 @@ def get_stats():
         "pass_count": pass_count,
         "fail_count": fail_count,
         "warning_count": warning_count,
-        "version": "4.4"
+        "version": "4.5"
     }), 200
 
 
