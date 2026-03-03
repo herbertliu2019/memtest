@@ -13,7 +13,7 @@
 ############################################################
 
 # --- 1. 配置区 ---
-TEST_TIME=300                                           # 压力测试时长（秒）
+TEST_TIME=900                                           # 压力测试时长（秒）
 LOG_DIR="/root/test_logs"                               # 日志路径
 UPLOAD_URL="http://192.168.30.18:8080/mem/api/upload"  # 中控服务器IP
 UPLOAD_TOKEN=""                                         # 可选：Bearer Token
@@ -237,7 +237,16 @@ fi
 ############################################################
 TOTAL_CORES=$(nproc)
 FREE_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
-TEST_MB=$((FREE_KB * 90 / 100 / 1024))
+if [ "$FREE_KB" -gt 67108864 ]; then
+    PERCENT=95
+else
+    PERCENT=90
+fi
+
+TEST_MB=$((FREE_KB * PERCENT / 100 / 1024))
+log_info "Capacity detected. Using $PERCENT% of available memory for testing."
+
+#TEST_MB=$((FREE_KB * 90 / 100 / 1024))
 
 if [ "$FREE_KB" -lt $((512 * 1024)) ]; then
     log_error "Available memory too low (${FREE_KB}KB). Aborting to prevent OOM."
@@ -494,23 +503,44 @@ echo "############################################################"
 # 14. 自动关机
 ############################################################
 if [ "$AUTO_POWEROFF" -eq 1 ]; then
-    if [ "$FINAL_STATUS" = "FAIL" ]; then
-        log_warn "Test failed. Machine will power off in 30 seconds..."
-        sleep 30
-    else
-        log_info "Test completed. Machine will power off in 10 seconds..."
-        sleep 10
-    fi
-    log_info "Shutting down..."
-    sudo poweroff
-else
-    if [ "$AUTO_MODE" -eq 1 ]; then
-        log_info "Auto mode: exiting without poweroff."
-    else
-        echo ""
-        echo -e "[DONE] Press any key to exit (auto-exit in 60s)..."
-        read -t 60 -n 1 -s || true
-    fi
+    case "$FINAL_STATUS" in
+
+        FAIL)
+            echo "======================================"
+            echo " MEMORY TEST FAILED - DO NOT POWER OFF"
+            echo " Waiting for technician inspection..."
+            echo "======================================"
+
+            touch /var/log/memtest_fail.flag
+
+            # 无限等待，不占CPU
+            while true; do
+                sleep 300
+            done
+            ;;
+
+        WARNING)
+            echo "WARNING detected. Powering off in 30 seconds..."
+            sleep 30
+            poweroff
+            ;;
+
+        PASS)
+            echo "PASS. Powering off in 10 seconds..."
+            sleep 10
+            poweroff
+            ;;
+
+    esac
+
+	else
+		if [ "$AUTO_MODE" -eq 1 ]; then
+			log_info "Auto mode: exiting without poweroff."
+		else
+			echo ""
+			echo -e "[DONE] Press any key to exit (auto-exit in 60s)..."
+			read -t 60 -n 1 -s || true
+		fi
 fi
 
 if [ "$FINAL_STATUS" = "FAIL" ]; then
